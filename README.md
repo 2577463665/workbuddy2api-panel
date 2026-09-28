@@ -289,6 +289,46 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o login ./cmd/login
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit ./cmd/credit
 ```
 
+### 方式四：KernelSU / Magisk 模块（Android arm64-v8a）
+
+Release 中的 `wb2api-panel-vX.Y.Z-ksu-arm64-v8a.zip` 是 KernelSU / Magisk 通用模块（arm64-v8a 设备），由 CI 在打 tag 时自动构建，与五平台二进制同源同版本。
+
+```bash
+# 1) KernelSU / Magisk 管理器 → 从本地安装 → 选择该 zip
+#    （Magisk 上功能等价：service.sh/uninstall.sh 通用，action.sh 仅 KSU 生效）
+#
+# 2) 重启设备：service.sh 在开机完成后自动拉起服务（默认端口 7863）
+#
+# 3) 浏览器打开面板（设备本机或同局域网）
+#    http://127.0.0.1:7863/panel/    （或 http://<设备IP>:7863/panel/）
+#
+# 4) 首次启动会在持久目录自动生成 config.json（含随机 api_key，见日志）
+adb shell cat /data/adb/wb2api/wb2api.log | grep api_key
+```
+
+数据持久化在 `/data/adb/wb2api/`（模块目录之外），**模块升级/重装不丢配置与账号**：
+
+| 路径 | 内容 |
+|---|---|
+| `/data/adb/wb2api/config.json` | 配置（自动生成，可改） |
+| `/data/adb/wb2api/auths/` | 账号凭证 |
+| `/data/adb/wb2api/data/` | 状态/用量数据 |
+| `/data/adb/wb2api/wb2api.log` | 运行日志（追加） |
+
+开关（`adb shell` 执行）：
+
+```bash
+touch /data/adb/wb2api/DISABLE_AUTOSTART   # 禁用开机自启
+rm /data/adb/wb2api/DISABLE_AUTOSTART      # 恢复开机自启
+touch /data/adb/wb2api/KEEP_DATA           # 卸载模块时保留数据
+```
+
+KernelSU 用户也可在管理器里**点击模块图标**（action.sh）一键切换自启开关并同步启停服务。
+
+**在线更新**：模块内置 `updateJson` 更新频道。面板发新版本后（Release 发布时 CI 自动刷新更新源），KernelSU / Magisk 管理器的模块页会提示更新，点击即可自动下载安装新版本——配置与账号数据不受影响（持久目录在模块外）。
+
+注意：Android 上添加账号用面板（方式 A）即可；命令行脚本（方式 B）依赖 bash + python3，Android 不自带。
+
 ### 添加账号（登录）
 
 **方式 A：Web 面板（推荐，各平台通用，免命令行）**

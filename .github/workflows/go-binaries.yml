@@ -1,10 +1,14 @@
 name: go-binaries
 
 # 可运行二进制构建/发布：
-#   - PR / push main → 测试 + 五平台编译验证（产物仅存 artifact，不发布）
-#   - push v* tag    → 同上 + 打包上传到 GitHub Release（zip/tar.gz + checksums）
+#   - PR / push main → 测试 + 五平台编译验证 + KSU arm64-v8a 模块打包（产物仅存 artifact，不发布）
+#   - push v* tag    → 同上 + 打包上传到 GitHub Release（zip/tar.gz + KSU 模块 zip + checksums）
 # 固化的发布纪律（曾两次人祸，见仓库 HANDOFF）：-s -w 剥离、二进制版本串 == 源码
 # appVersion、tag 版本 == 源码版本（-ci 后缀的测试 tag 豁免，用于演练发布线）。
+#
+# KSU 模块说明：KernelSU/Magisk 通用模块，运行于 android arm64-v8a 设备。
+# 触发方式沿用 tag push（而非 on: release）——Release 由 GITHUB_TOKEN 创建，
+# 其事件不会触发其他工作流（GitHub 递归触发防护），监听 release 事件永远不跑。
 on:
   push:
     branches: [main]
@@ -16,6 +20,7 @@ on:
       - "cmd/**"
       - "internal/**"
       - "config.example.json"
+      - "ksu/**"
       - ".github/workflows/go-binaries.yml"
   workflow_dispatch:
 
@@ -98,9 +103,79 @@ jobs:
           path: ${{ env.name }}
           retention-days: 7
 
+  # KernelSU/Magisk 模块（android arm64-v8a）：复用 build 矩阵产出的 linux-arm64 二进制
+  # （CGO_ENABLED=0 纯静态，同一 ELF 在 Android 用户态直接可跑），组装模块结构后打包。
+  # 模块脚本在 ksu/ 目录维护；module.prop 版本号在 CI 注入，保持与 Release 一致。
+  ksu-module:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取源码版本号
+        id: ver
+        run: |
+          V="$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)"
+          echo "v=$V" >> "$GITHUB_OUTPUT"        # 完整 appVersion（1.2.3-panel），版本串断言用
+          echo "vf=${V%-panel}" >> "$GITHUB_OUTPUT"   # 剥后缀（1.2.3），artifact/资产文件名口径
+
+      # 拿 build 矩阵的 linux-arm64 产物（wb2api-panel-vX.Y.Z-linux-arm64.tar.gz，X.Y.Z 已剥 -panel）
+      - uses: actions/download-artifact@v4
+        with:
+          name: wb2api-panel-v${{ steps.ver.outputs.vf }}-linux-arm64.tar.gz
+
+      - name: 组装模块结构
+        run: |
+          set -eu
+          V="${{ steps.ver.outputs.v }}"
+          VF="${{ steps.ver.outputs.vf }}"
+          TARBALL="wb2api-panel-v${VF}-linux-arm64.tar.gz"
+
+          # 解出 linux-arm64 二进制并复用既有版本串断言（防编错树/漏 ldflags）
+          # 注意断言用带后缀的源码 appVersion（二进制内嵌的是完整串）
+          tar xzf "$TARBALL" wb2api
+          if ! grep -qa "$V" wb2api; then
+            echo "::error::ksu binary missing version string $V"
+            exit 1
+          fi
+
+          STAGE="$(mktemp -d)/module"
+          mkdir -p "$STAGE"
+
+          # 模块骨架：脚本与 meta 来自仓库 ksu/ 目录（README.md 是维护者说明，不进模块）
+          cp -r ksu/. "$STAGE/"
+          rm -f "$STAGE/README.md"
+
+          # 二进制置入模块
+          install -m 0755 wb2api "$STAGE/wb2api"
+
+          # module.prop 注入真实版本：version 与 Release 同号；versionCode 用
+          # 1.2.3 → 10203 的十进制拼装（KSU/Magisk 只要求单调递增即可）
+          A="${VF%%.*}"; R="${VF#*.}"; B="${R%%.*}"; C="${R#*.}"
+          VCODE="$((A * 1000000 + B * 1000 + C))"
+          sed -i "s/^version=.*/version=v${VF}/; s/^versionCode=.*/versionCode=${VCODE}/" "$STAGE/module.prop"
+
+          # 置换 CRLF（Windows 检出可能性）并统一可执行位
+          find "$STAGE" -name "*.sh" -exec sed -i 's/\r$//' {} +
+          chmod 0755 "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh
+
+          # 打包：模块 zip 必须在根目录直接含 module.prop（不能套顶层文件夹）
+          NAME="wb2api-panel-v${VF}-ksu-arm64-v8a.zip"
+          ( cd "$STAGE" && zip -qr9 "$GITHUB_WORKSPACE/$NAME" . )
+          echo "name=$NAME" >> "$GITHUB_ENV"
+
+          # 落一份结构清单进日志，方便发布时人工核对
+          unzip -l "$GITHUB_WORKSPACE/$NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.name }}
+          path: ${{ env.name }}
+          retention-days: 7
+
   # 仅 tag 触发：校验 tag == 源码版本（-ci 演练 tag 豁免）→ 汇总资产 → 建 Release
   publish:
-    needs: build
+    needs: [build, ksu-module]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -138,7 +213,64 @@ jobs:
           name: ${{ github.ref_name }}-panel
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            CI 自动构建发布（五平台二进制 + checksums）。
+            CI 自动构建发布（五平台二进制 + KernelSU/Magisk arm64-v8a 模块 + checksums）。
 
             完整变更：https://github.com/${{ github.repository }}/compare/${{ steps.prev.outputs.prev }}...${{ github.ref_name }}
           files: dist/*
+
+      # ── KSU/Magisk 模块在线更新提示 ──────────────────────────────────────────
+      # module.prop 的 updateJson 指向固定 URL（jsdelivr CDN 缓存 gh 分支内容，国内可达性好）：
+      #   https://cdn.jsdelivr.net/gh/<owner>/<repo>@ksu-update/update.json
+      # 管理器（KernelSU/Magisk）定期拉取，发现 versionCode 变大即在模块页提示更新，
+      # 点击后自动下载 zipUrl 指向的模块 zip 安装。
+      # 分支每次发布整体覆盖（单文件 commit），jsdelivr 缓存最长 12h 过期，提示更新
+      # 最多延迟半天（模块 zip 的下载直连 GitHub Releases，不受此缓存影响）。
+      # -ci 演练 tag 跳过：演练版本不得进更新频道（versionCode 也会与正式版撞号）。
+      - name: 推送 update.json 到 ksu-update 分支
+        if: ${{ !contains(github.ref_name, '-ci') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          V="${GITHUB_REF_NAME#v}"
+          # versionCode 与 ksu-module job 同口径：1.2.3 → 1000000*1 + 1000*2 + 3
+          A="${V%%.*}"; R="${V#*.}"; B="${R%%.*}"; C="${R#*.}"
+          VCODE="$((A * 1000000 + B * 1000 + C))"
+          REPO="${GITHUB_REPOSITORY}"
+
+          {
+            echo '{'
+            echo "  \"version\": \"v${V}\","
+            echo "  \"versionCode\": ${VCODE},"
+            echo "  \"zipUrl\": \"https://github.com/${REPO}/releases/download/${GITHUB_REF_NAME}/wb2api-panel-v${V}-ksu-arm64-v8a.zip\","
+            echo "  \"changelog\": \"https://github.com/${REPO}/releases/tag/${GITHUB_REF_NAME}\""
+            echo '}'
+          } > update.json
+          cat update.json
+
+          # 用 Contents API 写文件（GITHUB_TOKEN 足够；推分支不触发 on: push 工作流，
+          # 无递归触发风险）。分支不存在时先从当前 commit 建。
+          REF_SHA=$(curl -sf -H "Authorization: token ${GH_TOKEN}" \
+                "https://api.github.com/repos/${REPO}/git/ref/heads/ksu-update" \
+              | jq -r '.object.sha' || true)
+          if [ -z "${REF_SHA}" ] || [ "${REF_SHA}" = "null" ]; then
+            curl -sf -X POST -H "Authorization: token ${GH_TOKEN}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/repos/${REPO}/git/refs" \
+                 -d "{\"ref\": \"refs/heads/ksu-update\", \"sha\": \"${GITHUB_SHA}\"}"
+          fi
+
+          # 已存在则取当前 blob sha（PUT 更新 contents 必须带）
+          FILE_SHA=$(curl -sf -H "Authorization: token ${GH_TOKEN}" \
+                "https://api.github.com/repos/${REPO}/contents/update.json?ref=ksu-update" \
+              | jq -r '.sha' || true)
+          B64=$(base64 -w0 < update.json)
+          BODY="{\"message\": \"ksu update channel: ${GITHUB_REF_NAME}\", \"content\": \"${B64}\", \"branch\": \"ksu-update\"}"
+          if [ -n "${FILE_SHA}" ] && [ "${FILE_SHA}" != "null" ]; then
+            BODY=$(echo "$BODY" | jq --arg s "$FILE_SHA" '. + {sha: $s}')
+          fi
+          curl -sf -X PUT -H "Authorization: token ${GH_TOKEN}" \
+               -H "Accept: application/vnd.github+json" \
+               "https://api.github.com/repos/${REPO}/contents/update.json?ref=ksu-update" \
+               -d "$BODY"
+          echo "update.json pushed to ksu-update branch"
