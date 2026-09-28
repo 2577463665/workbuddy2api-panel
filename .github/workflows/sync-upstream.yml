@@ -112,9 +112,9 @@ jobs:
   release:
     needs: sync
     if: needs.sync.outputs.changed == 'true'
+    # 子工作流需要 contents: write 才能建 Release / 推 ksu-update 分支
     permissions:
       contents: write
     uses: ./.github/workflows/go-binaries.yml
     with:
       tag: ${{ needs.sync.outputs.tag }}
-    secrets: inherit

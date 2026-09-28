@@ -32,9 +32,8 @@ on:
         type: string
         required: false
         default: ""
-    secrets:
-      GITHUB_TOKEN:
-        required: false
+    # 注意：GITHUB_TOKEN 是保留的自动 secret，不能在 workflow_call 里显式声明
+    # （声明会导致整个 workflow 校验失败）。子工作流通过 permissions 获得所需权限。
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
