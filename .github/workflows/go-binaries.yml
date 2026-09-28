@@ -142,9 +142,9 @@ jobs:
           STAGE="$(mktemp -d)/module"
           mkdir -p "$STAGE"
 
-          # 模块骨架：脚本与 meta 来自仓库 ksu/ 目录（README.md 是维护者说明，不进模块）
+          # 模块骨架：脚本与 meta 来自仓库 ksu/ 目录（README.md/.gitattributes 是维护者文件，不进模块）
           cp -r ksu/. "$STAGE/"
-          rm -f "$STAGE/README.md"
+          rm -f "$STAGE/README.md" "$STAGE/.gitattributes"
 
           # 二进制置入模块
           install -m 0755 wb2api "$STAGE/wb2api"
@@ -155,8 +155,9 @@ jobs:
           VCODE="$((A * 1000000 + B * 1000 + C))"
           sed -i "s/^version=.*/version=v${VF}/; s/^versionCode=.*/versionCode=${VCODE}/" "$STAGE/module.prop"
 
-          # 置换 CRLF（Windows 检出可能性）并统一可执行位
-          find "$STAGE" -name "*.sh" -exec sed -i 's/\r$//' {} +
+          # 行尾统一为 LF（module.prop 必须 LF：KSU/Magisk 官方格式要求）并统一可执行位。
+          # ksu/.gitattributes 已锁定 eol=lf，这里是第二道兜底（防上游以 CRLF 提交）。
+          sed -i 's/\r$//' "$STAGE/module.prop" "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh
           chmod 0755 "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh
 
           # 打包：模块 zip 必须在根目录直接含 module.prop（不能套顶层文件夹）

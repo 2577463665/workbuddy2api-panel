@@ -1,0 +1,6 @@
+# KernelSU/Magisk 模块文件必须保持 LF 行尾（KSU 官方文档明确要求 module.prop 用 UNIX 行尾；
+# 脚本 CRLF 在 Android 上也会导致 sh 解析异常）。仓库在 Windows 上 autocrlf=true，
+# 不锁定的话这些文件检出即变 CRLF。
+*.sh text eol=lf
+module.prop text eol=lf
+*.md text eol=lf
