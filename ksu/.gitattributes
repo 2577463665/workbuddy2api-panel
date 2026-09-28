@@ -1,7 +1,8 @@
-# KernelSU/Magisk 模块文件必须保持 LF 行尾（KSU 官方文档明确要求 module.prop 用 UNIX 行尾；
-# 脚本 CRLF 在 Android 上也会导致 sh 解析异常）。仓库在 Windows 上 autocrlf=true，
-# 不锁定的话这些文件检出即变 CRLF。
-*.sh text eol=lf
-module.prop text eol=lf
-*.html text eol=lf
-*.md text eol=lf
+# KernelSU/Magisk 模块文件必须保持 LF 行尾：
+#   - KSU/Magisk 官方要求 module.prop 用 UNIX 行尾，CRLF 会导致属性解析异常
+#   - 脚本 CRLF 在 Android 上会导致 sh 解析错误
+# 仓库在 Windows 上 autocrlf=true，不锁定则检出即变 CRLF（本地已实际复现：
+# 早期版本的 .gitattributes 自身带 CRLF，导致 `*.sh` 规则里的 \r 被当成模式的一部分、
+# 规则静默失效，所有文件都被提交成了 CRLF）。
+# 因此这里用 `*` 覆盖全部文件（.gitattributes 自身也必须匹配，否则规则不生效）。
+* text eol=lf

@@ -62,6 +62,12 @@
     background:var(--card);border:1px solid var(--line);border-radius:14px;
     padding:18px;margin-bottom:12px;font-size:14px;line-height:1.6;
   }
+  pre{
+    margin:12px 0 0;padding:12px;border-radius:10px;background:var(--bg);
+    border:1px solid var(--line);font-size:12px;line-height:1.55;
+    white-space:pre-wrap;word-break:break-all;max-height:340px;overflow:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
 </style>
 </head>
 <body>
@@ -107,6 +113,16 @@
     <button id="btnAutoOff">关闭开机自启</button>
     <button id="btnRefresh">刷新信息</button>
   </div>
+</section>
+
+<section class="card">
+  <div class="label">诊断</div>
+  <div class="hint" style="margin-top:0">服务起不来时先点「运行自检」，再点「查看日志」</div>
+  <div class="actions">
+    <button id="btnDiag">运行自检</button>
+    <button id="btnLog">查看日志</button>
+  </div>
+  <pre id="diagOut" hidden></pre>
 </section>
 
 <div id="toast"></div>
@@ -225,14 +241,44 @@ async function copy(text, okMsg) {
 
 async function startService() {
   // 直接拉起（与自启开关解耦：手动点启动就该启动，不看 DISABLE_AUTOSTART）
+  // chmod 先行：模块安装器会把模块内文件统一设为 0644（installer.sh:419），
+  // 根目录下的二进制必须显式恢复可执行位，否则 exec 报 Permission denied。
   await exec(
+    "B=" + MOD + "/wb2api; chmod 0755 \"$B\" 2>/dev/null; " +
     "mkdir -p " + PERSIST + "; cd " + PERSIST + " && " +
-    "nohup " + MOD + "/wb2api -config " + PERSIST + "/config.json " +
+    "nohup \"$B\" -config " + PERSIST + "/config.json " +
     ">> " + PERSIST + "/wb2api.log 2>&1 &"
   );
   await sleep(1800);
   await refresh();
   toast(info.STATUS === "running" ? "服务已启动" : "启动中，请稍后刷新");
+}
+
+var diagOut = null;
+function showOut(text) {
+  diagOut.hidden = false;
+  diagOut.textContent = text || "(无输出)";
+}
+
+// 自检：二进制权限、能否真正执行、端口是否在听
+async function selfTest() {
+  var r = await exec(
+    "B=" + MOD + "/wb2api; " +
+    "echo '== 二进制 =='; ls -l \"$B\" 2>&1; " +
+    "echo; echo '== 可执行位 =='; " +
+    "if [ -x \"$B\" ]; then echo '正常'; else echo '缺失，正在修复'; chmod 0755 \"$B\" 2>&1; fi; " +
+    "echo; echo '== 执行测试（-h，应打印用法）=='; " +
+    "\"$B\" -h 2>&1 | head -8; " +
+    "echo; echo '== 端口监听 =='; " +
+    "netstat -ltn 2>/dev/null | grep ':7863' || echo '未监听'; " +
+    "echo; echo '== 进程 =='; pidof wb2api 2>/dev/null || echo '未运行'"
+  );
+  showOut(r.stdout || r.stderr);
+}
+
+async function showLog() {
+  var r = await exec("tail -n 40 " + PERSIST + "/wb2api.log 2>&1 || echo '(暂无日志)'");
+  showOut(r.stdout || r.stderr);
 }
 
 async function stopService() {

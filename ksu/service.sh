@@ -49,16 +49,34 @@ done
 # 持久目录兜底：旧版本模块升级/意外删除时，先建回来再启动
 mkdir -p "$PERSIST"
 
+# 可执行位兜底：模块安装器会把模块内文件统一设为 0644（installer.sh 的
+# set_perm_recursive），根目录下的二进制不会像 system/bin 那样被自动置 0755。
+# customize.sh 安装时已用 set_perm 修正，这里再兜一次——覆盖旧版模块升级、
+# 权限被第三方清理工具改动等情况；否则 exec 直接 Permission denied。
+BIN="$MODDIR/wb2api"
+[ -x "$BIN" ] || chmod 0755 "$BIN" 2>/dev/null
+if [ ! -f "$BIN" ]; then
+  wlog "FATAL: binary missing: $BIN"
+  exit 1
+fi
+
 # 进程清理：comm 最多 15 字符，pkill -x wb2api 按短名精确匹配；
 # 上一进程未退干净先杀掉，避免端口占用
 pkill -x wb2api 2>/dev/null && { sleep 1; pkill -9 -x wb2api 2>/dev/null; }
 
 cd "$PERSIST" || { wlog "cannot cd $PERSIST, abort"; exit 1; }
-nohup "$MODDIR/wb2api" -config "$PERSIST/config.json" >> "$PERSIST/wb2api.log" 2>&1 &
+nohup "$BIN" -config "$PERSIST/config.json" >> "$PERSIST/wb2api.log" 2>&1 &
 SVC_PID=$!
 
-# 首次启动时 config.json 由程序自动生成（含随机 api_key），稍等再采集信息，
-# 否则写出的 KEY 会是空值。
+# 启动结果判定：进程若立刻退出（权限不足/端口占用/程序报错），把日志尾部同步到
+# logcat——否则用户只能翻文件，排障成本高。adb logcat -s wb2api 即可看到。
 sleep 2
+if kill -0 "$SVC_PID" 2>/dev/null; then
+  wlog "started pid ${SVC_PID}"
+else
+  wlog "FATAL: wb2api exited immediately (binary=$BIN)"
+  tail -n 15 "$PERSIST/wb2api.log" 2>/dev/null | while IFS= read -r L; do wlog "log| $L"; done
+fi
+
 write_info
-wlog "started pid ${SVC_PID} (panel info written to $PERSIST/INFO.txt)"
+wlog "panel info written to $PERSIST/INFO.txt"
