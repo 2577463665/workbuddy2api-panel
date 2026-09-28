@@ -282,21 +282,38 @@ jobs:
         run: |
           PREV=$(git describe --tags --abbrev=0 "${{ steps.rel.outputs.tag }}^" 2>/dev/null || true)
           echo "prev=${PREV}" >> "$GITHUB_OUTPUT"
+
+      # Release 说明单独算，便于在没有上一版 tag（首次发布）时省掉 compare 链接，
+      # 避免拼出 compare/...v0.0.1 这种 404 链接
+      - name: 生成 Release 说明
+        id: notes
+        run: |
+          set -eu
+          TAG="${{ steps.rel.outputs.tag }}"
+          PREV="${{ steps.prev.outputs.prev }}"
+          {
+            echo 'body<<EOF_NOTES'
+            echo "wb2api-panel **${TAG}**（本 fork 独立版本号）"
+            echo
+            echo "- 五平台二进制（Windows / Linux / macOS × amd64 / arm64）"
+            echo "- KernelSU / Magisk 模块：\`wb2api-panel-${TAG}-ksu-arm64-v8a.zip\`"
+            echo "- checksums.txt 校验和"
+            echo
+            echo "上游面板代码版本见二进制启动日志："
+            echo "\`workbuddy2api-panel fork <本版本> (upstream panel <上游版本>)\`"
+            if [ -n "$PREV" ]; then
+              echo
+              echo "完整变更：https://github.com/${{ github.repository }}/compare/${PREV}...${TAG}"
+            fi
+            echo 'EOF_NOTES'
+          } >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           name: ${{ steps.rel.outputs.tag }}
           prerelease: ${{ contains(steps.rel.outputs.tag, '-') }}
-          body: |
-            wb2api-panel **${{ steps.rel.outputs.tag }}**（本 fork 独立版本号）
-
-            - 五平台二进制（Windows / Linux / macOS × amd64 / arm64）
-            - KernelSU / Magisk 模块：`wb2api-panel-${{ steps.rel.outputs.tag }}-ksu-arm64-v8a.zip`
-            - checksums.txt 校验和
-
-            上游面板代码版本见二进制启动日志（`workbuddy2api-panel fork <本版本> (upstream panel <上游版本>)`）。
-
-            完整变更：https://github.com/${{ github.repository }}/compare/${{ steps.prev.outputs.prev }}...${{ steps.rel.outputs.tag }}
+          body: ${{ steps.notes.outputs.body }}
           files: dist/*
 
       # ── 备用更新频道（jsdelivr 镜像）─────────────────────────────────────────
