@@ -15,8 +15,9 @@ name: sync-upstream
 # 上游发 v1.12.0 → 本仓库自动发 v1.12.1 并附带 KernelSU arm64-v8a 模块。
 on:
   schedule:
-    # 每 6 小时检查一次（GitHub 定时任务高峰期可能延迟 10~30 分钟，属正常）
-    - cron: "17 */6 * * *"
+    # 每小时检查一次（上游发版频繁，6 小时一次太慢；GitHub 定时任务高峰期可能延迟
+    # 5~30 分钟，属正常）。无新提交时整个 run 约 10 秒即结束，开销可忽略。
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       force:
