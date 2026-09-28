@@ -1,0 +1,120 @@
+name: sync-upstream
+
+# 自动跟随上游面板更新（无需人工干预）：
+#   定时检查 upstream（linguo2625469/workbuddy2api-panel）→ 有新提交则：
+#     1. 合并进本仓库 main
+#     2. 自动把 appVersion 升一档（上游 vX.Y.Z → 本 fork vX.(Y+1).0）
+#        —— 必须大于上游，否则 tag 撞车且 versionCode 不增长会让模块更新提示失效
+#     3. 推送 main + 打 tag
+#     4. 同 run 内调用 go-binaries 完成构建与发布
+#
+# 为什么要同一个 run 内调用（不能靠 push 事件接力）：
+#   用 GITHUB_TOKEN 推送的提交不会触发新的 workflow（GitHub 递归触发防护），
+#   推完等 push 事件会永远等不到。故这里用 workflow_call 直接串联。
+#
+# 上游发 v1.12.0 → 本仓库自动发 v1.12.1 并附带 KernelSU arm64-v8a 模块。
+on:
+  schedule:
+    # 每 6 小时检查一次（GitHub 定时任务高峰期可能延迟 10~30 分钟，属正常）
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "即使上游无新提交也强制重新发布当前版本"
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      tag: ${{ steps.sync.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 合并上游更新并升级版本号
+        id: sync
+        run: |
+          set -eu
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/linguo2625469/workbuddy2api-panel.git
+          git fetch --no-tags upstream main
+
+          OUR_HEAD=$(git rev-parse HEAD)
+          UP_HEAD=$(git rev-parse upstream/main)
+
+          # 上游无新提交：默认跳过（force 时仍走一遍发布，便于手动重发）
+          if git merge-base --is-ancestor "$UP_HEAD" "$OUR_HEAD"; then
+            if [ "${{ inputs.force }}" != "true" ]; then
+              echo "上游无新提交，跳过"
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "force=true：用当前版本重发"
+            CUR=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go | sed 's/-panel$//')
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "tag=v${CUR}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 合并上游：本 fork 只在上游之上追加提交，正常 fast-forward 或干净合并
+          if ! git merge --no-edit "$UP_HEAD"; then
+            echo "::error::上游合并冲突，需人工处理（本 fork 改动与上游改了同一处）"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+          # 版本升级：上游 X.Y.Z → 本 fork X.(Y+1).0
+          SRC_FULL=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
+          SRC="${SRC_FULL%-panel}"
+          A="${SRC%%.*}"; R="${SRC#*.}"; B="${R%%.*}"
+          NEW="${A}.$((B + 1)).0"
+
+          sed -i "s/^const appVersion = \".*\"/const appVersion = \"${NEW}-panel\"/" cmd/server/main.go
+          grep -q "appVersion = \"${NEW}-panel\"" cmd/server/main.go   # 替换必须生效
+          echo "上游版本 ${SRC} → 本 fork 版本 ${NEW}"
+
+          git add -A
+          git commit -m "chore: 同步上游面板并升版本号 ${NEW}-panel"
+
+          # GITHUB_TOKEN 推送（不会触发 push 事件，本 run 内自行串联发布）
+          git push origin HEAD:main
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW}" >> "$GITHUB_OUTPUT"
+
+      - name: 打 tag 并推送
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          set -eu
+          TAG="${{ steps.sync.outputs.tag }}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "refs/tags/${TAG}$"; then
+            echo "tag ${TAG} 已存在（force 重发场景），删除后重建"
+            git push origin ":refs/tags/${TAG}" || true
+          fi
+          git tag -f "$TAG"
+          git push origin "refs/tags/${TAG}"
+
+  # 复用 go-binaries 的构建+发布链路（workflow_call），以 sync job 推好的 tag 为 ref
+  release:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/go-binaries.yml
+    with:
+      tag: ${{ needs.sync.outputs.tag }}
+    secrets: inherit
