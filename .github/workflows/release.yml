@@ -1,0 +1,115 @@
+name: release
+
+# 手动正式发版入口：在 Actions 页面点「Run workflow」即可。
+#
+#   version  留空 → 按 bump 类型递增当前版本（默认 patch：0.0.1 → 0.0.2）
+#   version  填写 → 直接用该版本号（如 1.0.0），必须 ≥ 当前版本
+#   bump     patch / minor / major，仅在 version 留空时生效
+#
+# 流程：算版本号 → 写 FORK_VERSION → 提交推 main → 打 tag → 同 run 内调用
+# go-binaries 完成构建与发布（五平台二进制 + KernelSU 模块 + checksums + 更新频道）。
+#
+# 为什么不推完 tag 就完事、等 push 事件触发构建：
+#   GITHUB_TOKEN 推送的 tag 不会触发新的 workflow（GitHub 递归触发防护），
+#   必须在本 run 内用 workflow_call 直接串联构建发布。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "指定版本号（如 1.0.0；留空则按 bump 递增）"
+        type: string
+        required: false
+        default: ""
+      bump:
+        description: "递增类型（version 留空时生效）"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 计算新版本号并打 tag
+        id: ver
+        run: |
+          set -eu
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          CUR="$(tr -d ' \r\n' < FORK_VERSION)"
+          INPUT="${{ inputs.version }}"
+          BUMP="${{ inputs.bump }}"
+          echo "当前版本: ${CUR}"
+
+          if [ -n "$INPUT" ]; then
+            NEW="$INPUT"
+          else
+            A="${CUR%%.*}"; R="${CUR#*.}"; B="${R%%.*}"; C="${R##*.}"
+            case "$BUMP" in
+              major) NEW="$((A + 1)).0.0" ;;
+              minor) NEW="${A}.$((B + 1)).0" ;;
+              *)     NEW="${A}.${B}.$((C + 1))" ;;
+            esac
+          fi
+
+          # 格式校验：必须是 X.Y.Z 三段纯数字，否则 module.prop 的 versionCode
+          # 拼装与更新频道比较都会出问题
+          if ! printf '%s' "$NEW" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::版本号格式非法：'$NEW'（要求 X.Y.Z 三段纯数字，如 0.0.2）"
+            exit 1
+          fi
+
+          # 单调性校验：新版本不得小于当前版本，否则 KSU/Magisk 的 versionCode 变小，
+          # 已装模块的用户永远收不到更新提示
+          nv() { printf '%s' "$1" | awk -F. '{printf "%d", $1*1000000 + $2*1000 + $3}'; }
+          if [ "$(nv "$NEW")" -lt "$(nv "$CUR")" ]; then
+            echo "::error::新版本 $NEW 小于当前版本 $CUR，会造成 versionCode 回退、用户收不到更新"
+            exit 1
+          fi
+          if [ "$NEW" = "$CUR" ]; then
+            echo "版本号未变（${NEW}），按重新发布处理"
+          else
+            printf '%s\n' "$NEW" > FORK_VERSION
+            grep -qx "$NEW" FORK_VERSION
+            git add FORK_VERSION
+            git commit -m "chore: 发布版本号 ${NEW}"
+            git push origin HEAD:main
+            echo "版本号 ${CUR} → ${NEW}，已提交推送 main"
+          fi
+
+          TAG="v${NEW}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "refs/tags/${TAG}$"; then
+            echo "tag ${TAG} 已存在，删除后重建"
+            git push origin ":refs/tags/${TAG}" || true
+          fi
+          git tag -f "$TAG"
+          git push origin "refs/tags/${TAG}"
+          echo "已推送 tag ${TAG}"
+
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  # 复用 go-binaries 的构建+发布链路（workflow_call）
+  build-and-release:
+    needs: prepare
+    permissions:
+      contents: write
+    uses: ./.github/workflows/go-binaries.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}

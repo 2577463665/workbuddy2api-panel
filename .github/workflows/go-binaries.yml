@@ -3,10 +3,15 @@ name: go-binaries
 # 可运行二进制构建/发布：
 #   - PR / push main → 测试 + 五平台编译验证 + KSU arm64-v8a 模块打包（产物仅存 artifact，不发布）
 #   - push v* tag    → 同上 + 打包上传到 GitHub Release（zip/tar.gz + KSU 模块 zip + checksums）
-#   - workflow_call  → 供 sync-upstream.yml 复用（自动跟随上游发版；tag 由调用方推好，
+#   - workflow_call  → 供 sync-upstream.yml / release.yml 复用（tag 由调用方推好，
 #                      以 inputs.tag 为 ref 检出构建，避免 push 事件的递归防护限制）
-# 固化的发布纪律（曾两次人祸，见仓库 HANDOFF）：-s -w 剥离、二进制版本串 == 源码
-# appVersion、tag 版本 == 源码版本（-ci 后缀的测试 tag 豁免，用于演练发布线）。
+#
+# 发布纪律（本 fork 独立版本体系，0.0.1 起步）：
+#   1. 版本号唯一来源 = 仓库根目录 FORK_VERSION（刻意不写进 cmd/server/main.go 的
+#      appVersion —— 那是上游文件，改了它上游每次发版都会让自动合并冲突）
+#   2. 构建时用 -ldflags "-X main.forkVersion=<版本>" 注入二进制，并断言二进制含该串
+#   3. tag 版本必须等于 FORK_VERSION（-ci 后缀的演练 tag 豁免）
+#   4. 二进制一律 -s -w 剥离符号
 #
 # KSU 模块说明：KernelSU/Magisk 通用模块，运行于 android arm64-v8a 设备。
 # 触发方式沿用 tag push（而非 on: release）——Release 由 GITHUB_TOKEN 创建，
@@ -23,6 +28,7 @@ on:
       - "internal/**"
       - "config.example.json"
       - "ksu/**"
+      - "FORK_VERSION"
       - ".github/workflows/go-binaries.yml"
   workflow_dispatch:
   workflow_call:
@@ -76,23 +82,26 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: 取源码版本号
+      # 本 fork 的发布版本号唯一来源是仓库根目录的 FORK_VERSION。
+      # 刻意不放在 cmd/server/main.go 的 appVersion：那是上游代码，本 fork 改了它，
+      # 上游每次发版（改同一行）都会让 sync-upstream 的自动合并冲突。
+      - name: 取本 fork 版本号
         id: ver
-        run: echo "v=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)" >> "$GITHUB_OUTPUT"
+        run: echo "v=$(tr -d ' \r\n' < FORK_VERSION)" >> "$GITHUB_OUTPUT"
 
-      - name: 构建（剥离符号，对齐本地发布口径）
+      - name: 构建（剥离符号 + 注入 fork 版本号）
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
+        run: go build -ldflags "-s -w -X main.forkVersion=${{ steps.ver.outputs.v }}" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
 
-      # 版本串断言：二进制必须含源码 appVersion（防交叉编译矩阵里编错树/漏 ldflags）
+      # 版本串断言：二进制必须含注入的 fork 版本号（防交叉编译矩阵里编错树/漏 ldflags）
       - name: 断言二进制版本串
         run: |
           BIN="wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}"
           if ! grep -qa "${{ steps.ver.outputs.v }}" "$BIN"; then
-            echo "::error::binary missing version string ${{ steps.ver.outputs.v }}"
+            echo "::error::binary missing fork version string ${{ steps.ver.outputs.v }}"
             exit 1
           fi
           echo "version assert OK: ${{ steps.ver.outputs.v }}"
@@ -100,7 +109,6 @@ jobs:
       - name: 打包（windows=zip 三件套，其余=tar.gz）
         run: |
           V="${{ steps.ver.outputs.v }}"
-          V="${V%-panel}"   # 文件名不带 -panel 后缀（wb2api-panel-v1.2.3-... 既有惯例）
           case "${{ matrix.goos }}" in
             windows)
               NAME="wb2api-panel-v${V}-windows-amd64.zip"
@@ -130,14 +138,14 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: 取源码版本号
+      - name: 取本 fork 版本号
         id: ver
         run: |
-          V="$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)"
-          echo "v=$V" >> "$GITHUB_OUTPUT"        # 完整 appVersion（1.2.3-panel），版本串断言用
-          echo "vf=${V%-panel}" >> "$GITHUB_OUTPUT"   # 剥后缀（1.2.3），artifact/资产文件名口径
+          V="$(tr -d ' \r\n' < FORK_VERSION)"
+          echo "v=$V" >> "$GITHUB_OUTPUT"    # fork 版本号（0.0.1），版本串断言 / module.prop 用
+          echo "vf=$V" >> "$GITHUB_OUTPUT"   # 资产文件名口径（与 v 同值，保留以防命名规则变化）
 
-      # 拿 build 矩阵的 linux-arm64 产物（wb2api-panel-vX.Y.Z-linux-arm64.tar.gz，X.Y.Z 已剥 -panel）
+      # 拿 build 矩阵的 linux-arm64 产物（wb2api-panel-vX.Y.Z-linux-arm64.tar.gz）
       - uses: actions/download-artifact@v4
         with:
           name: wb2api-panel-v${{ steps.ver.outputs.vf }}-linux-arm64.tar.gz
@@ -149,11 +157,10 @@ jobs:
           VF="${{ steps.ver.outputs.vf }}"
           TARBALL="wb2api-panel-v${VF}-linux-arm64.tar.gz"
 
-          # 解出 linux-arm64 二进制并复用既有版本串断言（防编错树/漏 ldflags）
-          # 注意断言用带后缀的源码 appVersion（二进制内嵌的是完整串）
+          # 解出 linux-arm64 二进制并断言 fork 版本串（防编错树/漏 ldflags）
           tar xzf "$TARBALL" wb2api
           if ! grep -qa "$V" wb2api; then
-            echo "::error::ksu binary missing version string $V"
+            echo "::error::ksu binary missing fork version string $V"
             exit 1
           fi
 
@@ -223,17 +230,20 @@ jobs:
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: tag 与源码版本一致性断言
+      # 发布纪律：tag 版本必须等于 FORK_VERSION（-ci 演练 tag 豁免）。
+      # 防止「打了 tag 却忘了升版本号」——那样会产出版本号错乱的 Release，
+      # 且模块的 versionCode 不再增长、用户收不到更新提示。
+      - name: tag 与 FORK_VERSION 一致性断言
         run: |
-          SRC=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
-          SRC="${SRC%-panel}"   # appVersion 带 -panel 后缀，比对前剥掉
+          SRC="$(tr -d ' \r\n' < FORK_VERSION)"
           TAG_NAME="${{ steps.rel.outputs.tag }}"
           TAG="${TAG_NAME#v}"
           if [[ "$TAG_NAME" != *-ci ]]; then
             if [[ "$TAG" != "$SRC" ]]; then
-              echo "::error::tag $TAG_NAME 与源码 appVersion=$SRC 不一致（先提交版本号再打 tag）"
+              echo "::error::tag $TAG_NAME 与 FORK_VERSION=$SRC 不一致（先升版本号再打 tag）"
               exit 1
             fi
+            echo "版本一致性 OK: tag=$TAG_NAME FORK_VERSION=$SRC"
           else
             echo "演练 tag（-ci 后缀）跳过一致性断言：tag=$TAG src=$SRC"
           fi
@@ -275,10 +285,16 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
-          name: ${{ steps.rel.outputs.tag }}-panel
+          name: ${{ steps.rel.outputs.tag }}
           prerelease: ${{ contains(steps.rel.outputs.tag, '-') }}
           body: |
-            CI 自动构建发布（五平台二进制 + KernelSU/Magisk arm64-v8a 模块 + checksums）。
+            wb2api-panel **${{ steps.rel.outputs.tag }}**（本 fork 独立版本号）
+
+            - 五平台二进制（Windows / Linux / macOS × amd64 / arm64）
+            - KernelSU / Magisk 模块：`wb2api-panel-${{ steps.rel.outputs.tag }}-ksu-arm64-v8a.zip`
+            - checksums.txt 校验和
+
+            上游面板代码版本见二进制启动日志（`workbuddy2api-panel fork <本版本> (upstream panel <上游版本>)`）。
 
             完整变更：https://github.com/${{ github.repository }}/compare/${{ steps.prev.outputs.prev }}...${{ steps.rel.outputs.tag }}
           files: dist/*
