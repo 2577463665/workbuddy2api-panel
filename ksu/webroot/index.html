@@ -240,18 +240,20 @@ async function copy(text, okMsg) {
 }
 
 async function startService() {
-  // 直接拉起（与自启开关解耦：手动点启动就该启动，不看 DISABLE_AUTOSTART）
-  // chmod 先行：模块安装器会把模块内文件统一设为 0644（installer.sh:419），
-  // 根目录下的二进制必须显式恢复可执行位，否则 exec 报 Permission denied。
-  await exec(
-    "B=" + MOD + "/wb2api; chmod 0755 \"$B\" 2>/dev/null; " +
-    "mkdir -p " + PERSIST + "; cd " + PERSIST + " && " +
-    "nohup \"$B\" -config " + PERSIST + "/config.json " +
-    ">> " + PERSIST + "/wb2api.log 2>&1 &"
-  );
-  await sleep(1800);
+  // 与 service.sh 共用同一启动实现（start.sh），避免两处逻辑漂移。
+  // start.sh 内含：可执行位兜底、CA 根证书环境、清理旧进程、拉起、结果判定。
+  var r = await exec("sh " + MOD + "/start.sh 2>&1");
+  await sleep(500);
   await refresh();
-  toast(info.STATUS === "running" ? "服务已启动" : "启动中，请稍后刷新");
+  var out = (r.stdout || "").trim();
+  if (info.STATUS === "running") {
+    toast("服务已启动");
+    if (out) showOut(out);
+  } else {
+    // 启动失败时把原因直接摆出来（start.sh 会带出日志末尾）
+    showOut("启动失败。\n" + (out || "(无输出)"));
+    toast("启动失败，详见下方诊断输出");
+  }
 }
 
 var diagOut = null;
@@ -260,7 +262,7 @@ function showOut(text) {
   diagOut.textContent = text || "(无输出)";
 }
 
-// 自检：二进制权限、能否真正执行、端口是否在听
+// 自检：二进制权限、能否真正执行、CA 根证书、端口、进程
 async function selfTest() {
   var r = await exec(
     "B=" + MOD + "/wb2api; " +
@@ -269,6 +271,8 @@ async function selfTest() {
     "if [ -x \"$B\" ]; then echo '正常'; else echo '缺失，正在修复'; chmod 0755 \"$B\" 2>&1; fi; " +
     "echo; echo '== 执行测试（-h，应打印用法）=='; " +
     "\"$B\" -h 2>&1 | head -8; " +
+    "echo; echo '== CA 根证书（Android 上必须显式指定，否则 HTTPS 报 unknown authority）=='; " +
+    "sh " + MOD + "/cacert.sh 2>&1; " +
     "echo; echo '== 端口监听 =='; " +
     "netstat -ltn 2>/dev/null | grep ':7863' || echo '未监听'; " +
     "echo; echo '== 进程 =='; pidof wb2api 2>/dev/null || echo '未运行'"

@@ -2,6 +2,9 @@
 # wb2api-panel KernelSU/Magisk 模块开机自启脚本
 # 由模块管理器在 late_start service 阶段以 root 执行。
 # 数据目录 /data/adb/wb2api 持久于模块之外：模块升级/重装不丢配置与账号。
+#
+# 启动逻辑本身在 start.sh（与 WebUI 的手动启动共用同一实现，避免两处漂移）；
+# 本脚本只负责开机特有的部分：禁启开关、等开机完成、启动后写面板信息。
 MODDIR="${0%/*}"
 export MODDIR
 PERSIST=/data/adb/wb2api
@@ -47,36 +50,11 @@ until [ "$(getprop sys.boot_completed)" = "1" ] || [ "$waited" -ge 60 ]; do
 done
 
 # 持久目录兜底：旧版本模块升级/意外删除时，先建回来再启动
-mkdir -p "$PERSIST"
+mkdir -p "$PERSIST" 2>/dev/null
 
-# 可执行位兜底：模块安装器会把模块内文件统一设为 0644（installer.sh 的
-# set_perm_recursive），根目录下的二进制不会像 system/bin 那样被自动置 0755。
-# customize.sh 安装时已用 set_perm 修正，这里再兜一次——覆盖旧版模块升级、
-# 权限被第三方清理工具改动等情况；否则 exec 直接 Permission denied。
-BIN="$MODDIR/wb2api"
-[ -x "$BIN" ] || chmod 0755 "$BIN" 2>/dev/null
-if [ ! -f "$BIN" ]; then
-  wlog "FATAL: binary missing: $BIN"
-  exit 1
-fi
+# 启动（含可执行位兜底、CA 证书环境、旧进程清理、结果判定与日志）
+sh "$MODDIR/start.sh"
 
-# 进程清理：comm 最多 15 字符，pkill -x wb2api 按短名精确匹配；
-# 上一进程未退干净先杀掉，避免端口占用
-pkill -x wb2api 2>/dev/null && { sleep 1; pkill -9 -x wb2api 2>/dev/null; }
-
-cd "$PERSIST" || { wlog "cannot cd $PERSIST, abort"; exit 1; }
-nohup "$BIN" -config "$PERSIST/config.json" >> "$PERSIST/wb2api.log" 2>&1 &
-SVC_PID=$!
-
-# 启动结果判定：进程若立刻退出（权限不足/端口占用/程序报错），把日志尾部同步到
-# logcat——否则用户只能翻文件，排障成本高。adb logcat -s wb2api 即可看到。
-sleep 2
-if kill -0 "$SVC_PID" 2>/dev/null; then
-  wlog "started pid ${SVC_PID}"
-else
-  wlog "FATAL: wb2api exited immediately (binary=$BIN)"
-  tail -n 15 "$PERSIST/wb2api.log" 2>/dev/null | while IFS= read -r L; do wlog "log| $L"; done
-fi
-
+# 无论启动成功与否都写面板信息（启动失败时用户仍需知道去哪里看日志）
 write_info
 wlog "panel info written to $PERSIST/INFO.txt"

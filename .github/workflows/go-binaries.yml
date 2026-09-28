@@ -178,11 +178,13 @@ jobs:
           # webroot/ 的权限与 SELinux 上下文由 KernelSU 安装时自动设置——官方文档明确要求
           # 模块不要自行设置，故此处不碰该目录。
           sed -i 's/\r$//' "$STAGE/module.prop" \
-                           "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh \
-                           "$STAGE"/info.sh "$STAGE"/customize.sh \
+                           "$STAGE"/service.sh "$STAGE"/start.sh "$STAGE"/action.sh \
+                           "$STAGE"/uninstall.sh "$STAGE"/info.sh "$STAGE"/cacert.sh \
+                           "$STAGE"/customize.sh \
                            "$STAGE"/webroot/index.html
-          chmod 0755 "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh \
-                     "$STAGE"/info.sh "$STAGE"/customize.sh
+          chmod 0755 "$STAGE"/service.sh "$STAGE"/start.sh "$STAGE"/action.sh \
+                     "$STAGE"/uninstall.sh "$STAGE"/info.sh "$STAGE"/cacert.sh \
+                     "$STAGE"/customize.sh
 
           # 打包：模块 zip 必须在根目录直接含 module.prop（不能套顶层文件夹）
           NAME="wb2api-panel-v${VF}-ksu-arm64-v8a.zip"
