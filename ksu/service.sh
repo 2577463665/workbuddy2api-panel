@@ -3,14 +3,37 @@
 # 由模块管理器在 late_start service 阶段以 root 执行。
 # 数据目录 /data/adb/wb2api 持久于模块之外：模块升级/重装不丢配置与账号。
 MODDIR="${0%/*}"
+export MODDIR
 PERSIST=/data/adb/wb2api
 
 # 日志进 logcat（tag wb2api）：/system/bin/log 是 toybox android 组件，KSU/Magisk 环境均有；
 # 极端缺失时静默降级（输出对功能非必需）。
 wlog() { /system/bin/log -p i -t wb2api "$@" 2>/dev/null || true; }
 
+# 写一份人可读的面板信息（地址/密钥/状态），方便用户随时查看：
+#   1) /data/adb/wb2api/INFO.txt      —— 持久目录内（root）
+#   2) /sdcard/wb2api-info.txt        —— 外部存储，文件管理器直接打开，无需 root
+# 两次写入都失败不影响服务本身。
+write_info() {
+  # 显式 sh 调用（不依赖可执行位，权限异常时仍可用）
+  sh "$MODDIR/info.sh" > "$PERSIST/INFO.txt" 2>/dev/null || true
+
+  if [ -d /sdcard ]; then
+    # /sdcard 在部分设备的 boot 早期尚未挂载完成，失败即跳过（下次重启会重写）
+    {
+      echo "WorkBuddy2API 面板信息（开机自动生成）"
+      echo "生成时间：$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+      echo
+      sh "$MODDIR/info.sh" 2>/dev/null
+      echo
+      echo "面板地址用于浏览器访问；访问密钥首次登录面板时粘贴，之后浏览器会记住。"
+      echo "换 WiFi/热点后 IP 会变化：可在 KernelSU 里点本模块的「操作」按钮查看最新地址。"
+    } > /sdcard/wb2api-info.txt 2>/dev/null || wlog "write /sdcard/wb2api-info.txt failed"
+  fi
+}
+
 # 开机禁启开关：/data/adb/wb2api/DISABLE_AUTOSTART 存在即跳过启动
-# （action.sh 在 KernelSU 管理器里一键切换；也可 adb shell 手动 touch/rm）
+# （在 KernelSU 的模块 WebUI 里一键切换；也可 adb shell 手动 touch/rm）
 if [ -f "$PERSIST/DISABLE_AUTOSTART" ]; then
   wlog "autostart disabled, skip"
   exit 0
@@ -32,4 +55,10 @@ pkill -x wb2api 2>/dev/null && { sleep 1; pkill -9 -x wb2api 2>/dev/null; }
 
 cd "$PERSIST" || { wlog "cannot cd $PERSIST, abort"; exit 1; }
 nohup "$MODDIR/wb2api" -config "$PERSIST/config.json" >> "$PERSIST/wb2api.log" 2>&1 &
-wlog "started pid $! on :7863 (panel http://127.0.0.1:7863/panel/)"
+SVC_PID=$!
+
+# 首次启动时 config.json 由程序自动生成（含随机 api_key），稍等再采集信息，
+# 否则写出的 KEY 会是空值。
+sleep 2
+write_info
+wlog "started pid ${SVC_PID} (panel info written to $PERSIST/INFO.txt)"

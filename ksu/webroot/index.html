@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WorkBuddy2API</title>
+<style>
+  :root {
+    --bg:#f2f2f7; --card:#fff; --text:#1d1d1f; --sub:#6e6e73;
+    --line:#e5e5ea; --accent:#0071e3; --ok:#34c759; --off:#8e8e93; --warn:#ff9f0a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#000; --card:#1c1c1e; --text:#f5f5f7; --sub:#98989d;
+      --line:#2c2c2e; --accent:#0a84ff; --ok:#30d158; --off:#636366; --warn:#ffd60a;
+    }
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    margin:0;padding:22px 16px 44px;background:var(--bg);color:var(--text);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  }
+  header{display:flex;align-items:baseline;gap:8px;margin:0 4px 16px}
+  h1{margin:0;font-size:21px;font-weight:650;letter-spacing:-.2px}
+  .ver{color:var(--sub);font-size:13px;font-variant-numeric:tabular-nums}
+  .badges{display:flex;gap:8px;margin:0 4px 16px;flex-wrap:wrap}
+  .badge{
+    display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
+    background:var(--card);border:1px solid var(--line);font-size:13px;color:var(--sub);
+  }
+  .badge i{width:8px;height:8px;border-radius:50%;background:var(--off);flex:none}
+  .badge.on i{background:var(--ok)}
+  .badge.off i{background:var(--off)}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:15px 16px;margin-bottom:12px;
+  }
+  .label{font-size:13px;color:var(--sub);margin-bottom:7px}
+  .value{
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:15px;word-break:break-all;line-height:1.45;
+  }
+  .value.empty{color:var(--warn);font-family:inherit;font-size:14px}
+  .hint{font-size:12.5px;color:var(--sub);margin-top:8px;line-height:1.5}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
+  button{
+    font:inherit;font-size:14px;padding:9px 15px;border-radius:10px;cursor:pointer;
+    border:1px solid var(--line);background:var(--bg);color:var(--text);
+    transition:opacity .15s,transform .08s;
+  }
+  button:active{transform:scale(.97);opacity:.75}
+  button.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:550}
+  button[disabled]{opacity:.45;pointer-events:none}
+  #toast{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(12px);
+    background:rgba(0,0,0,.85);color:#fff;padding:10px 17px;border-radius:11px;
+    font-size:14px;opacity:0;transition:opacity .22s,transform .22s;pointer-events:none;
+    max-width:88%;text-align:center;backdrop-filter:blur(8px);
+  }
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .fatal{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px;margin-bottom:12px;font-size:14px;line-height:1.6;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>WorkBuddy2API 面板</h1>
+  <span class="ver" id="ver"></span>
+</header>
+
+<div class="badges">
+  <span class="badge" id="bStatus"><i></i><span>读取中…</span></span>
+  <span class="badge" id="bAuto"><i></i><span>读取中…</span></span>
+</div>
+
+<noscript><div class="fatal">需要启用 JavaScript 才能查看面板信息。</div></noscript>
+
+<section class="card">
+  <div class="label">面板地址</div>
+  <div class="value" id="url">—</div>
+  <div class="hint">手机与电脑连同一个 WiFi 即可访问；换网络后 IP 会变，重新打开本页刷新</div>
+  <div class="actions">
+    <button class="primary" id="btnCopyUrl">复制地址</button>
+    <button id="btnOpenUrl">浏览器打开</button>
+  </div>
+</section>
+
+<section class="card">
+  <div class="label">访问密钥</div>
+  <div class="value" id="key">—</div>
+  <div class="hint">首次进入面板时粘贴此密钥，之后浏览器会记住，无需重复输入</div>
+  <div class="actions">
+    <button class="primary" id="btnCopyKey">复制密钥</button>
+  </div>
+</section>
+
+<section class="card">
+  <div class="label">服务控制</div>
+  <div class="hint" style="margin-top:0">改完端口等配置后可在此重启服务</div>
+  <div class="actions">
+    <button id="btnStart">启动服务</button>
+    <button id="btnStop">停止服务</button>
+    <button id="btnAutoOn">开启开机自启</button>
+    <button id="btnAutoOff">关闭开机自启</button>
+    <button id="btnRefresh">刷新信息</button>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+var MOD = "/data/adb/modules/wb2api_panel";
+var PERSIST = "/data/adb/wb2api";
+
+var info = {};
+
+function $(id) { return document.getElementById(id); }
+
+function toast(msg) {
+  var el = $("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(function () { el.classList.remove("show"); }, 2200);
+  // KernelSU 原生 toast 作为补充（不存在时忽略）
+  try { if (window.ksu && ksu.toast) ksu.toast(msg); } catch (e) {}
+}
+
+// 执行 shell 命令：完全按 KernelSU 官方 js 包的实现方式调用 ksu.exec
+// （ksu.exec(command, optionsJSON, callbackName) → 回调挂在 window[callbackName]）
+function exec(cmd) {
+  return new Promise(function (resolve) {
+    if (!window.ksu || typeof ksu.exec !== "function") {
+      resolve({ errno: -1, stdout: "", stderr: "KSU API unavailable" });
+      return;
+    }
+    var cb = "wb2api_cb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+    window[cb] = function (errno, stdout, stderr) {
+      try { delete window[cb]; } catch (e) { window[cb] = undefined; }
+      resolve({ errno: errno, stdout: stdout || "", stderr: stderr || "" });
+    };
+    try {
+      ksu.exec(cmd, JSON.stringify({}), cb);
+    } catch (e) {
+      try { delete window[cb]; } catch (_) {}
+      resolve({ errno: -1, stdout: "", stderr: String(e) });
+    }
+  });
+}
+
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+function parseKV(text) {
+  var out = {};
+  (text || "").split("\n").forEach(function (line) {
+    var i = line.indexOf("=");
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1);
+  });
+  return out;
+}
+
+function setValue(el, text, placeholder) {
+  if (text) {
+    el.textContent = text;
+    el.classList.remove("empty");
+  } else {
+    el.textContent = placeholder;
+    el.classList.add("empty");
+  }
+}
+
+function setBadge(el, on, text) {
+  el.classList.toggle("on", !!on);
+  el.classList.toggle("off", !on);
+  el.querySelector("span").textContent = text;
+}
+
+async function refresh() {
+  var r = await exec("sh " + MOD + "/info.sh");
+  if (r.errno !== 0 && !r.stdout) {
+    toast("读取失败：" + (r.stderr || "未知错误"));
+    return;
+  }
+  info = parseKV(r.stdout);
+
+  $("ver").textContent = info.VERSION || "";
+  setBadge($("bStatus"), info.STATUS === "running",
+           info.STATUS === "running" ? "服务运行中" : "服务未运行");
+  setBadge($("bAuto"), info.AUTOSTART === "on",
+           info.AUTOSTART === "on" ? "开机自启已开" : "开机自启已关");
+  setValue($("url"), info.URL, "读取失败");
+  setValue($("key"), info.KEY,
+           info.KEY ? "" : "尚未生成（服务首次启动后自动创建）");
+}
+
+// 复制：优先 Clipboard API（KSU WebUI 的 WebView 不一定支持），回落 execCommand
+async function copy(text, okMsg) {
+  if (!text) { toast("没有可复制的内容"); return; }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(okMsg);
+    return;
+  } catch (e) {}
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    var ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    toast(ok ? okMsg : "复制失败，请长按手动复制");
+  } catch (e) {
+    toast("复制失败，请长按手动复制");
+  }
+}
+
+async function startService() {
+  // 直接拉起（与自启开关解耦：手动点启动就该启动，不看 DISABLE_AUTOSTART）
+  await exec(
+    "mkdir -p " + PERSIST + "; cd " + PERSIST + " && " +
+    "nohup " + MOD + "/wb2api -config " + PERSIST + "/config.json " +
+    ">> " + PERSIST + "/wb2api.log 2>&1 &"
+  );
+  await sleep(1800);
+  await refresh();
+  toast(info.STATUS === "running" ? "服务已启动" : "启动中，请稍后刷新");
+}
+
+async function stopService() {
+  await exec("pkill -x wb2api 2>/dev/null; sleep 1; pkill -9 -x wb2api 2>/dev/null; true");
+  await sleep(600);
+  await refresh();
+  toast("服务已停止");
+}
+
+function busy(btn, fn) {
+  return async function () {
+    btn.disabled = true;
+    try { await fn(); } finally { btn.disabled = false; }
+  };
+}
+
+function main() {
+  if (!window.ksu || typeof ksu.exec !== "function") {
+    var d = document.createElement("div");
+    d.className = "fatal";
+    d.innerHTML = "无法调用系统接口：本页需要通过 <b>KernelSU 管理器</b>的模块 WebUI 打开。" +
+                  "<br><br>仍可在管理器的「操作」按钮里查看面板地址与密钥，" +
+                  "或查看文件 /sdcard/wb2api-info.txt。";
+    document.body.insertBefore(d, document.body.children[2] || null);
+    return;
+  }
+
+  $("btnCopyUrl").onclick = function () { copy(info.URL, "面板地址已复制"); };
+  $("btnCopyKey").onclick = function () { copy(info.KEY, "密钥已复制"); };
+  $("btnOpenUrl").onclick = busy($("btnOpenUrl"), async function () {
+    if (!info.URL) { toast("地址未知"); return; }
+    // 交给系统浏览器打开（root 下调 am；失败则提示用复制地址）
+    var r = await exec('am start -a android.intent.action.VIEW -d "' + info.URL + '" --user 0');
+    if (r.errno !== 0) toast("请在浏览器中粘贴已复制的地址");
+  });
+  $("btnStart").onclick = busy($("btnStart"), startService);
+  $("btnStop").onclick = busy($("btnStop"), stopService);
+  $("btnAutoOn").onclick = busy($("btnAutoOn"), async function () {
+    await exec("rm -f " + PERSIST + "/DISABLE_AUTOSTART");
+    await refresh();
+    toast("已开启开机自启");
+  });
+  $("btnAutoOff").onclick = busy($("btnAutoOff"), async function () {
+    await exec("mkdir -p " + PERSIST + "; touch " + PERSIST + "/DISABLE_AUTOSTART");
+    await refresh();
+    toast("已关闭开机自启（服务不受影响）");
+  });
+  $("btnRefresh").onclick = busy($("btnRefresh"), refresh);
+
+  refresh();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", main);
+} else {
+  main();
+}
+</script>
+</body>
+</html>

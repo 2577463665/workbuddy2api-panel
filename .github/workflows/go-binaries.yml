@@ -175,8 +175,14 @@ jobs:
 
           # 行尾统一为 LF（module.prop 必须 LF：KSU/Magisk 官方格式要求）并统一可执行位。
           # ksu/.gitattributes 已锁定 eol=lf，这里是第二道兜底（防上游以 CRLF 提交）。
-          sed -i 's/\r$//' "$STAGE/module.prop" "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh
-          chmod 0755 "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh
+          # webroot/ 的权限与 SELinux 上下文由 KernelSU 安装时自动设置——官方文档明确要求
+          # 模块不要自行设置，故此处不碰该目录。
+          sed -i 's/\r$//' "$STAGE/module.prop" \
+                           "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh \
+                           "$STAGE"/info.sh "$STAGE"/customize.sh \
+                           "$STAGE"/webroot/index.html
+          chmod 0755 "$STAGE"/service.sh "$STAGE"/action.sh "$STAGE"/uninstall.sh \
+                     "$STAGE"/info.sh "$STAGE"/customize.sh
 
           # 打包：模块 zip 必须在根目录直接含 module.prop（不能套顶层文件夹）
           NAME="wb2api-panel-v${VF}-ksu-arm64-v8a.zip"
@@ -308,3 +314,11 @@ jobs:
                "https://api.github.com/repos/${REPO}/contents/update.json?ref=ksu-update" \
                -d "$BODY"
           echo "update.json pushed to ksu-update branch"
+
+          # 清 jsdelivr CDN 缓存：否则最长 12h 内手机管理器仍拉到旧版本（更新提示延迟半天）。
+          # purge 失败不算发布失败——缓存稍后会自然过期，仅告警。
+          if curl -sf --max-time 60 "https://purge.jsdelivr.net/gh/${REPO}@ksu-update/update.json" >/dev/null; then
+            echo "jsdelivr 缓存已刷新（更新提示立即可见）"
+          else
+            echo "::warning::jsdelivr purge 失败，更新提示可能延迟到缓存过期（最长 12h）"
+          fi

@@ -295,16 +295,20 @@ Release 中的 `wb2api-panel-vX.Y.Z-ksu-arm64-v8a.zip` 是 KernelSU / Magisk 通
 
 ```bash
 # 1) KernelSU / Magisk 管理器 → 从本地安装 → 选择该 zip
-#    （Magisk 上功能等价：service.sh/uninstall.sh 通用，action.sh 仅 KSU 生效）
 #
 # 2) 重启设备：service.sh 在开机完成后自动拉起服务（默认端口 7863）
 #
-# 3) 浏览器打开面板（设备本机或同局域网）
-#    http://127.0.0.1:7863/panel/    （或 http://<设备IP>:7863/panel/）
+# 3) 查看面板地址与访问密钥（三种方式，任选其一）：
+#    · KernelSU：模块页 → 本模块 → WebUI 按钮（可复制地址/密钥，可启停服务）
+#    · 点模块的「操作」按钮，直接显示地址与密钥
+#    · 打开文件 /sdcard/wb2api-info.txt（开机自动生成，文件管理器即可查看）
 #
-# 4) 首次启动会在持久目录自动生成 config.json（含随机 api_key，见日志）
-adb shell cat /data/adb/wb2api/wb2api.log | grep api_key
+# 4) 浏览器打开面板地址，粘贴密钥进入（密钥只需输一次，浏览器会记住）
+#    http://<设备IP>:7863/panel/
 ```
+
+**关于访问密钥**：面板鉴权复用网关的 `api_key`（与 `/v1/*` 同一把），首次启动时随机生成。
+不需要用 adb 去翻文件——按上面第 3 步在手机上就能看到。
 
 数据持久化在 `/data/adb/wb2api/`（模块目录之外），**模块升级/重装不丢配置与账号**：
 
@@ -314,8 +318,9 @@ adb shell cat /data/adb/wb2api/wb2api.log | grep api_key
 | `/data/adb/wb2api/auths/` | 账号凭证 |
 | `/data/adb/wb2api/data/` | 状态/用量数据 |
 | `/data/adb/wb2api/wb2api.log` | 运行日志（追加） |
+| `/data/adb/wb2api/INFO.txt` | 面板信息（地址/密钥/状态，开机生成） |
 
-开关（`adb shell` 执行）：
+开机自启开关：KernelSU 的模块 WebUI 里一键切换；也可 `adb shell` 手动：
 
 ```bash
 touch /data/adb/wb2api/DISABLE_AUTOSTART   # 禁用开机自启
@@ -323,9 +328,7 @@ rm /data/adb/wb2api/DISABLE_AUTOSTART      # 恢复开机自启
 touch /data/adb/wb2api/KEEP_DATA           # 卸载模块时保留数据
 ```
 
-KernelSU 用户也可在管理器里**点击模块图标**（action.sh）一键切换自启开关并同步启停服务。
-
-**在线更新**：模块内置 `updateJson` 更新频道。面板发新版本后（Release 发布时 CI 自动刷新更新源），KernelSU / Magisk 管理器的模块页会提示更新，点击即可自动下载安装新版本——配置与账号数据不受影响（持久目录在模块外）。
+**在线更新**：模块内置 `updateJson` 更新频道。面板发新版本后（Release 发布时 CI 自动刷新更新源并清 CDN 缓存），KernelSU / Magisk 管理器的模块页会提示更新，点一下即自动下载安装——配置与账号数据不受影响（持久目录在模块外）。
 
 注意：Android 上添加账号用面板（方式 A）即可；命令行脚本（方式 B）依赖 bash + python3，Android 不自带。
 

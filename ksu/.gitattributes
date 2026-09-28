@@ -3,4 +3,5 @@
 # 不锁定的话这些文件检出即变 CRLF。
 *.sh text eol=lf
 module.prop text eol=lf
+*.html text eol=lf
 *.md text eol=lf
