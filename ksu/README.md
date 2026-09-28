@@ -53,19 +53,22 @@ Android 自带的 toybox **没有 `ip`、`awk`**，脚本里一律不用。已�
 
 ## 在线更新机制（updateJson）
 
-`module.prop` 的 `updateJson` 指向固定 URL：
+`module.prop` 的 `updateJson` 指向 GitHub 的 latest 稳定地址：
 
 ```
-https://cdn.jsdelivr.net/gh/<owner>/<repo>@ksu-update/update.json
+https://github.com/<owner>/<repo>/releases/latest/download/update.json
 ```
 
 KernelSU / Magisk 管理器定期拉取；发现 `versionCode` 比已安装的大，就在模块页提示更新，
 点击后自动下载 `zipUrl` 指向的模块 zip 安装。
 
-- `update.json` 由 publish job 每次发版时推到 `ksu-update` 分支
-- 推送后 CI 会调 `https://purge.jsdelivr.net/...` **主动清缓存**，
-  否则最长 12h 内手机仍拉到旧版本（更新提示延迟半天）
-- 模块 zip 下载直连 GitHub Releases（`zipUrl`），不受 CDN 缓存影响
+- `update.json` 由 publish job 生成，作为 **Release 资产**随版本发布
+- 用 `releases/latest/download/` 而非 jsdelivr CDN：**即时生效、无长时间缓存**，
+  且与模块 zip 同源（能下 zip 就能取 json，不额外引入可达性风险）
+- `latest` 自动排除 prerelease，因此 `-ci` 演练版本天然不会进更新频道
+- 另有一份镜像同步到 `ksu-update` 分支（`https://cdn.jsdelivr.net/gh/<owner>/<repo>@ksu-update/update.json`）：
+  实测 jsdelivr 对分支引用缓存很顽固（purge 返回成功后仍可能返回旧内容），故仅作备用，
+  需要时可手动改 `updateJson` 用它
 - `versionCode` 口径：`1.2.3` → `1*1000000 + 2*1000 + 3`
 
 ## 本地打包（不走 CI 时）

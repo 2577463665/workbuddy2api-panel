@@ -328,7 +328,7 @@ rm /data/adb/wb2api/DISABLE_AUTOSTART      # 恢复开机自启
 touch /data/adb/wb2api/KEEP_DATA           # 卸载模块时保留数据
 ```
 
-**在线更新**：模块内置 `updateJson` 更新频道。面板发新版本后（Release 发布时 CI 自动刷新更新源并清 CDN 缓存），KernelSU / Magisk 管理器的模块页会提示更新，点一下即自动下载安装——配置与账号数据不受影响（持久目录在模块外）。
+**在线更新**：模块内置 `updateJson` 更新频道，指向 Release 的 latest 稳定地址（即时生效）。面板发新版本后，KernelSU / Magisk 管理器的模块页会提示更新，点一下即自动下载安装——配置与账号数据不受影响（持久目录在模块外）。
 
 注意：Android 上添加账号用面板（方式 A）即可；命令行脚本（方式 B）依赖 bash + python3，Android 不自带。
 

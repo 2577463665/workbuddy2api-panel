@@ -239,6 +239,30 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # 模块在线更新清单。作为 Release 资产发布，module.prop 的 updateJson 指向
+      # https://github.com/<owner>/<repo>/releases/latest/download/update.json
+      # —— GitHub 的 latest 稳定地址：即时生效、无长时间 CDN 缓存，且与模块 zip 同源
+      # （能下 zip 就能取 json，不引入额外可达性风险）。prerelease（-ci 演练 tag）不会
+      # 成为 latest，因此天然不会污染更新频道。
+      - name: 生成模块更新清单
+        run: |
+          set -eu
+          TAG_NAME="${{ steps.rel.outputs.tag }}"
+          V="${TAG_NAME#v}"
+          A="${V%%.*}"; R="${V#*.}"; B="${R%%.*}"; C="${R#*.}"
+          VCODE="$((A * 1000000 + B * 1000 + C))"   # 与 ksu-module job 同口径
+          REPO="${GITHUB_REPOSITORY}"
+          {
+            echo '{'
+            echo "  \"version\": \"v${V}\","
+            echo "  \"versionCode\": ${VCODE},"
+            echo "  \"zipUrl\": \"https://github.com/${REPO}/releases/download/${TAG_NAME}/wb2api-panel-v${V}-ksu-arm64-v8a.zip\","
+            echo "  \"changelog\": \"https://github.com/${REPO}/releases/tag/${TAG_NAME}\""
+            echo '}'
+          } > dist/update.json
+          cat dist/update.json
+
       - name: checksums
         run: cd dist && sha256sum *.zip *.tar.gz > checksums.txt && ls -la
       - name: 上一版 tag（compare 链接用）
@@ -257,35 +281,25 @@ jobs:
             完整变更：https://github.com/${{ github.repository }}/compare/${{ steps.prev.outputs.prev }}...${{ steps.rel.outputs.tag }}
           files: dist/*
 
-      # ── KSU/Magisk 模块在线更新提示 ──────────────────────────────────────────
-      # module.prop 的 updateJson 指向固定 URL（jsdelivr CDN 缓存 gh 分支内容，国内可达性好）：
+      # ── 备用更新频道（jsdelivr 镜像）─────────────────────────────────────────
+      # 主通道是 Release 资产（见 module.prop 的 updateJson）：
+      #   https://github.com/<owner>/<repo>/releases/latest/download/update.json
+      # 即时生效、无长时间缓存，且与模块 zip 同源。
+      # 这里额外同步一份到 ksu-update 分支，作为备用地址：
       #   https://cdn.jsdelivr.net/gh/<owner>/<repo>@ksu-update/update.json
-      # 管理器（KernelSU/Magisk）定期拉取，发现 versionCode 变大即在模块页提示更新，
-      # 点击后自动下载 zipUrl 指向的模块 zip 安装。
-      # 分支每次发布整体覆盖（单文件 commit），jsdelivr 缓存最长 12h 过期，提示更新
-      # 最多延迟半天（模块 zip 的下载直连 GitHub Releases，不受此缓存影响）。
-      # -ci 演练 tag 跳过：演练版本不得进更新频道（versionCode 也会与正式版撞号）。
-      - name: 推送 update.json 到 ksu-update 分支
+      # 实测 jsdelivr 对分支引用的缓存很顽固（purge 返回成功后仍可能返回旧内容），
+      # 故只作备用，不作为模块默认更新源。
+      # -ci 演练 tag 跳过：演练版本不得进更新频道。
+      - name: 同步 update.json 到 ksu-update 分支（备用镜像）
         if: ${{ !contains(steps.rel.outputs.tag, '-ci') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           TAG_NAME="${{ steps.rel.outputs.tag }}"
-          V="${TAG_NAME#v}"
-          # versionCode 与 ksu-module job 同口径：1.2.3 → 1000000*1 + 1000*2 + 3
-          A="${V%%.*}"; R="${V#*.}"; B="${R%%.*}"; C="${R#*.}"
-          VCODE="$((A * 1000000 + B * 1000 + C))"
           REPO="${GITHUB_REPOSITORY}"
-
-          {
-            echo '{'
-            echo "  \"version\": \"v${V}\","
-            echo "  \"versionCode\": ${VCODE},"
-            echo "  \"zipUrl\": \"https://github.com/${REPO}/releases/download/${TAG_NAME}/wb2api-panel-v${V}-ksu-arm64-v8a.zip\","
-            echo "  \"changelog\": \"https://github.com/${REPO}/releases/tag/${TAG_NAME}\""
-            echo '}'
-          } > update.json
+          # 复用上一步生成的清单，避免两处各自拼 JSON 造成口径漂移
+          cp dist/update.json update.json
           cat update.json
 
           # 用 Contents API 写文件（GITHUB_TOKEN 足够；推分支不触发 on: push 工作流，
