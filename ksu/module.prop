@@ -4,4 +4,4 @@ version=v0.0.0-placeholder
 versionCode=1
 author=workbuddy2api-panel CI
 description=把腾讯WorkBuddy账号变成 OpenAI 兼容 API 的多账号网关（含 Web 管理面板）。默认端口 7863，面板 /panel/，配置与账号数据持久化在 /data/adb/wb2api
-updateJson=https://cdn.jsdelivr.net/gh/linguo2625469/workbuddy2api-panel@ksu-update/update.json
+updateJson=https://cdn.jsdelivr.net/gh/2577463665/workbuddy2api-panel@ksu-update/update.json
